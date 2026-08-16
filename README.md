@@ -1,5 +1,3 @@
-# MSI-CENTER-FOR-LINUX
-This is msi center for laptop KATANA
 # 🐉 MSI Center Ultimate
 
 **MSI Center Ultimate** — мощный центр управления для ноутбуков MSI на Linux.
