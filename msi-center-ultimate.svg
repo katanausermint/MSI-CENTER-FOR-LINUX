@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="40" fill="#1a1a1a"/>
+  <rect x="40" y="50" width="176" height="130" rx="15" fill="#0a0a0a" stroke="#ff4444" stroke-width="2"/>
+  <g fill="#ff2222">
+    <rect x="55" y="65" width="14" height="45" rx="3"/>
+    <rect x="69" y="65" width="14" height="30" rx="3"/>
+    <rect x="83" y="65" width="14" height="45" rx="3"/>
+    <rect x="69" y="95" width="14" height="15" rx="3"/>
+    <rect x="115" y="65" width="14" height="45" rx="3"/>
+    <rect x="129" y="65" width="14" height="20" rx="3"/>
+    <rect x="129" y="90" width="14" height="20" rx="3"/>
+    <rect x="115" y="105" width="28" height="5" rx="2"/>
+    <rect x="165" y="65" width="14" height="45" rx="3"/>
+    <rect x="165" y="60" width="14" height="5" rx="2"/>
+  </g>
+  <text x="128" y="212" text-anchor="middle" fill="#ff4444" font-size="18" font-weight="bold">MSI CENTER</text>
+</svg>
