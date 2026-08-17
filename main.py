@@ -1034,7 +1034,7 @@ class MSICenterUltimate:
         tk.Label(main, text=logo, font=("Courier", 14, "bold"), bg=THEME['bg_dark'], 
                 fg=THEME['accent'], justify="center").pack(pady=10)
         
-        tk.Label(main, text="MSI CENTER ULTIMATE v2.0", font=("Segoe UI", 24, "bold"), 
+        tk.Label(main, text="MSI CENTER ULTIMATE v2.1", font=("Segoe UI", 24, "bold"), 
                 bg=THEME['bg_dark'], fg=THEME['text']).pack(pady=5)
         tk.Label(main, text="Всё в одном: RGB + Кулеры + Диспетчер + Очиститель", 
                 font=("Segoe UI", 14), bg=THEME['bg_dark'], fg=THEME['text_secondary']).pack(pady=5)
