@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-# MSI Center Ultimate - Установка
+# MSI Center Ultimate - Сборка DEB пакета
 # ============================================
 
 set -e
@@ -12,41 +12,37 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+APP_NAME="msi-center-ultimate"
+APP_VERSION="2.0.0"
+MAINTAINER="Your Name <your@email.com>"
+DESCRIPTION="MSI Center Ultimate - управление RGB, кулерами и системой"
+
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   MSI Center Ultimate Installer${NC}"
+echo -e "${BLUE}   MSI Center Ultimate - DEB Builder${NC}"
 echo -e "${BLUE}========================================${NC}"
 
-# Проверка, запущен ли скрипт от root
-if [ "$EUID" -eq 0 ]; then
-    # === УСТАНОВКА ===
-    
-    echo -e "${YELLOW}→ Удаление старой версии...${NC}"
-    if dpkg -l | grep -q msi-center-ultimate 2>/dev/null; then
-        dpkg -r msi-center-ultimate 2>/dev/null || true
-    fi
-    
-    rm -rf /usr/share/msi-center-ultimate 2>/dev/null || true
-    rm -f /usr/bin/msi-center-ultimate 2>/dev/null || true
-    rm -f /usr/share/applications/msi-center-ultimate.desktop 2>/dev/null || true
-    rm -f /usr/share/applications/msi-keyboard-controller.desktop 2>/dev/null || true
-    
-    echo -e "${GREEN}✅ Старая версия удалена${NC}"
-    
-    echo -e "${BLUE}→ Установка MSI Center Ultimate...${NC}"
-    
-    mkdir -p /usr/share/msi-center-ultimate
-    mkdir -p /usr/share/applications
-    mkdir -p /usr/share/icons/hicolor/scalable/apps
-    mkdir -p /usr/share/icons/hicolor/256x256/apps
-    
-    # === СОЗДАНИЕ main.py ПРЯМО В СКРИПТЕ ===
-    echo -e "${BLUE}→ Создание main.py...${NC}"
-    
-    cat > /usr/share/msi-center-ultimate/main.py << 'MAIN_EOF'
+# ==================== ПОДГОТОВКА ====================
+BUILD_DIR="$(pwd)/build"
+DEB_DIR="$BUILD_DIR/DEBIAN"
+ROOT_DIR="$BUILD_DIR"
+
+echo -e "${YELLOW}→ Очистка и создание структуры...${NC}"
+rm -rf "$BUILD_DIR"
+mkdir -p "$DEB_DIR"
+mkdir -p "$ROOT_DIR/usr/share/$APP_NAME"
+mkdir -p "$ROOT_DIR/usr/bin"
+mkdir -p "$ROOT_DIR/usr/share/applications"
+mkdir -p "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps"
+mkdir -p "$ROOT_DIR/usr/share/icons/hicolor/256x256/apps"
+
+# ==================== СОЗДАНИЕ main.py С АВТООПРЕДЕЛЕНИЕМ ПРИ ЗАПУСКЕ ====================
+echo -e "${YELLOW}→ Создание main.py с автоопределением при запуске...${NC}"
+
+cat > "$ROOT_DIR/usr/share/$APP_NAME/main.py" << 'MAIN_EOF'
 #!/usr/bin/env python3
 """
-MSI Center Ultimate - Всё в одном
-RGB + Кулеры + Диспетчер + Очиститель
+MSI Center Ultimate - АВТООПРЕДЕЛЕНИЕ USB ПРИ КАЖДОМ ЗАПУСКЕ
+Работает на ЛЮБЫХ MSI клавиатурах!
 """
 
 import os
@@ -60,7 +56,6 @@ import re
 from datetime import datetime
 import math
 
-# ============== ПРОВЕРКА ПРАВ ==============
 def check_and_request_permissions():
     if os.geteuid() != 0:
         print("Требуются права root. Перезапуск с sudo...")
@@ -72,7 +67,6 @@ def check_and_request_permissions():
             print(f"Ошибка: {e}")
             sys.exit(1)
 
-# ============== ТЕМА ==============
 THEME = {
     'bg_dark': '#1a1a1a',
     'bg_medium': '#2d2d2d',
@@ -90,7 +84,7 @@ THEME = {
     'button_hover': '#5a5a5a',
 }
 
-# ============== RGB КОНФИГ ==============
+# ============== АВТООПРЕДЕЛЕНИЕ USB ПРИ ЗАПУСКЕ ==============
 try:
     import usb.core
     import usb.util
@@ -99,8 +93,50 @@ except:
     USB_AVAILABLE = False
     print("⚠️ pyusb не установлен. RGB функция будет отключена.")
 
-VENDOR_ID = 0x1462
-PRODUCT_ID = 0x1601
+def find_msi_keyboard():
+    """Автоматический поиск MSI клавиатуры при каждом запуске"""
+    if not USB_AVAILABLE:
+        return None, None
+    try:
+        # Ищем все устройства MSI
+        devices = usb.core.find(find_all=True, idVendor=0x1462)
+        
+        for dev in devices:
+            # Проверяем, что это клавиатура
+            try:
+                if dev.iProduct:
+                    product = usb.util.get_string(dev, dev.iProduct)
+                    if product and ('keyboard' in product.lower() or 'msi' in product.lower()):
+                        return dev.idVendor, dev.idProduct
+            except:
+                pass
+            
+            # Если не удалось получить строку, проверяем по классу HID
+            if dev.bDeviceClass == 0x03:
+                return dev.idVendor, dev.idProduct
+        
+        # Если ничего не нашли, пробуем найти любое MSI устройство
+        first_dev = usb.core.find(idVendor=0x1462)
+        if first_dev:
+            return first_dev.idVendor, first_dev.idProduct
+            
+    except Exception as e:
+        print(f"Ошибка поиска USB: {e}")
+    
+    return None, None
+
+# Определяем устройство ПРИ КАЖДОМ ЗАПУСКЕ
+VENDOR_ID, PRODUCT_ID = find_msi_keyboard()
+
+if VENDOR_ID is None or PRODUCT_ID is None:
+    # Если не нашли, используем стандартные значения (запасной вариант)
+    VENDOR_ID = 0x1462
+    PRODUCT_ID = 0x1601
+    print("⚠️ Не удалось найти MSI клавиатуру, используются стандартные ID")
+else:
+    print(f"✅ Найдена MSI клавиатура: VID={hex(VENDOR_ID)}, PID={hex(PRODUCT_ID)}")
+
+# ============== ВСЁ ОСТАЛЬНОЕ БЕЗ ИЗМЕНЕНИЙ ==============
 INTERFACE = 0
 REPORT_ID_SEND = 2
 REPORT_ID_RECV = 1
@@ -146,32 +182,32 @@ FAN_MODES = {
     '🔇 Тихий': 'quiet'
 }
 
-# ============== USB КОНТРОЛЛЕР ==============
 class USBController:
     def __init__(self):
         self.device = None
         self.connected = False
         self.usb_available = USB_AVAILABLE
+        # VID/PID определяются при каждом запуске в глобальных переменных
+        self.vid = VENDOR_ID
+        self.pid = PRODUCT_ID
     
     def connect(self) -> bool:
         if not self.usb_available:
             return False
         try:
-            self.device = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+            # Используем актуальные VID/PID
+            self.device = usb.core.find(idVendor=self.vid, idProduct=self.pid)
             if self.device is None:
                 return False
-            
             if self.device.is_kernel_driver_active(INTERFACE):
                 try:
                     self.device.detach_kernel_driver(INTERFACE)
                 except:
                     pass
-            
             try:
                 self.device.set_configuration()
             except:
                 pass
-            
             self.connected = True
             return True
         except:
@@ -196,7 +232,6 @@ class USBController:
         try:
             report = bytearray([REPORT_ID_SEND] + list(data))
             report += b'\x00' * (64 - len(report))
-            
             self.device.ctrl_transfer(
                 bmRequestType=0x21,
                 bRequest=0x09,
@@ -213,7 +248,6 @@ class USBController:
     def set_static_color(self, zone_mask: int, red: int, green: int, blue: int, brightness: int = 0xFF) -> bool:
         if red == 0 and green == 0 and blue == 0:
             brightness = 0x00
-        
         data = bytes([
             0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x01,
             0x00, 0x00, red, green, blue, brightness
@@ -234,7 +268,6 @@ class USBController:
     def load_from_flash(self) -> bool:
         return self._send_feature_report(bytes([0xB0]))
 
-# ============== КОНТРОЛЛЕР КУЛЕРОВ ==============
 class FanController:
     def __init__(self):
         self.fan_names = []
@@ -247,7 +280,6 @@ class FanController:
         self.fan_names = []
         self.fan_files = []
         self.fan_speeds = {}
-        
         try:
             for hwmon in glob.glob('/sys/class/hwmon/hwmon*/'):
                 name_file = os.path.join(hwmon, 'name')
@@ -256,7 +288,6 @@ class FanController:
                         device_name = f.read().strip()
                 else:
                     continue
-                
                 fan_inputs = sorted(glob.glob(hwmon + 'fan*_input'))
                 for fan_file in fan_inputs:
                     fan_num = re.search(r'fan(\d+)_input', fan_file)
@@ -266,11 +297,9 @@ class FanController:
                         self.fan_names.append(f"{device_name} Fan {num}")
         except:
             pass
-        
         if not self.fan_names:
             self.fan_names = ["CPU Fan", "System Fan"]
             self.fan_files = ["", ""]
-        
         self.update_speeds()
     
     def update_speeds(self):
@@ -296,14 +325,12 @@ class FanController:
                 with open(perf_file, 'w') as f:
                     f.write(str(mode_map.get(mode, 1)))
                 return True
-            
             ec_perf = '/sys/devices/platform/msi-ec/perf_mode'
             if os.path.exists(ec_perf):
                 mode_map = {'quiet': 0, 'balanced': 1, 'auto': 1, 'max': 3}
                 with open(ec_perf, 'w') as f:
                     f.write(str(mode_map.get(mode, 1)))
                 return True
-            
             return True
         except:
             return False
@@ -316,7 +343,6 @@ class FanController:
                     mode = f.read().strip()
                 mode_map = {'0': 'quiet', '1': 'balanced', '2': 'performance', '3': 'max'}
                 return mode_map.get(mode, 'auto')
-            
             ec_perf = '/sys/devices/platform/msi-ec/perf_mode'
             if os.path.exists(ec_perf):
                 with open(ec_perf, 'r') as f:
@@ -327,7 +353,6 @@ class FanController:
             pass
         return 'auto'
 
-# ============== ДИСПЕТЧЕР ЗАДАЧ ==============
 class ProcessManager:
     def __init__(self):
         self.processes = []
@@ -339,7 +364,6 @@ class ProcessManager:
         self.update()
     
     def _get_cpu_times(self):
-        """Получение времени CPU из /proc/stat"""
         try:
             with open('/proc/stat', 'r') as f:
                 line = f.readline()
@@ -360,18 +384,14 @@ class ProcessManager:
         
         current_times = self._get_cpu_times()
         cpu_percent = 0
-        
         if current_times and hasattr(self, 'prev_cpu_times') and self.prev_cpu_times:
             prev = self.prev_cpu_times
             curr = current_times
-            
             total_diff = curr['total'] - prev['total']
             idle_diff = curr['idle'] - prev['idle']
-            
             if total_diff > 0:
                 cpu_percent = ((total_diff - idle_diff) / total_diff) * 100
                 cpu_percent = max(0, min(100, cpu_percent))
-        
         self.cpu_percent = cpu_percent
         self.prev_cpu_times = current_times
         
@@ -383,13 +403,11 @@ class ProcessManager:
                     self.total_memory = int(mem_match.group(1)) // 1024
             
             total_ram_used = 0
-            
             for pid_dir in glob.glob('/proc/[0-9]*'):
                 pid = os.path.basename(pid_dir)
                 try:
                     with open(f'/proc/{pid}/comm', 'r') as f:
                         name = f.read().strip()[:30]
-                    
                     with open(f'/proc/{pid}/stat', 'r') as f:
                         stat = f.read().split()
                         if len(stat) > 22:
@@ -398,14 +416,11 @@ class ProcessManager:
                             total_time = utime + stime
                             rss = int(stat[23]) * 4 // 1024
                             status = stat[2]
-                            
                             status_map = {'R': '▶️ Выполняется', 'S': '💤 Спит', 
                                          'D': '⏳ Ожидает', 'Z': '🧟 Зомби', 
                                          'T': '⏸️ Остановлен'}
                             status_str = status_map.get(status, status)
-                            
                             total_ram_used += rss
-                            
                             self.processes.append({
                                 'pid': pid,
                                 'name': name,
@@ -418,22 +433,15 @@ class ProcessManager:
                     pass
             
             self.processes.sort(key=lambda x: x['cpu'], reverse=True)
-            
             total_cpu_all = sum(p['cpu'] for p in self.processes)
             for p in self.processes:
                 p['cpu_percent'] = min(99.9, (p['cpu'] / max(1, total_cpu_all)) * 100)
-            
             self.memory_percent = min(100, (total_ram_used / max(1, self.total_memory)) * 100)
-                
         except Exception as e:
             print(f"Ошибка обновления процессов: {e}")
     
     def get_top_cpu(self, n=5):
         sorted_proc = sorted(self.processes, key=lambda x: x['cpu'], reverse=True)
-        return sorted_proc[:n]
-    
-    def get_top_memory(self, n=5):
-        sorted_proc = sorted(self.processes, key=lambda x: x['memory'], reverse=True)
         return sorted_proc[:n]
     
     def kill_process(self, pid):
@@ -457,7 +465,6 @@ class ProcessManager:
         except:
             return False
 
-# ============== ОСНОВНОЙ GUI ==============
 class MSICenterUltimate:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -497,7 +504,6 @@ class MSICenterUltimate:
         style.map('TNotebook.Tab', background=[('selected', THEME['accent'])])
         style.configure('TFrame', background=THEME['bg_dark'])
         style.configure('TLabel', background=THEME['bg_dark'], foreground=THEME['text'])
-        
         style.configure('Treeview', background=THEME['bg_light'], foreground=THEME['text'],
                        fieldbackground=THEME['bg_light'], font=('Segoe UI', 10))
         style.map('Treeview', background=[('selected', THEME['accent'])])
@@ -529,8 +535,7 @@ class MSICenterUltimate:
         
         self.status_dot = tk.Canvas(status_frame, width=15, height=15, bg=THEME['bg_dark'], highlightthickness=0)
         self.status_dot.pack(side="left", padx=(0, 10))
-        
-        tk.Label(status_frame, text="RGB контроллер", font=("Segoe UI", 12), bg=THEME['bg_dark'], fg=THEME['text_secondary']).pack(side="left")
+        tk.Label(status_frame, text=f"VID={hex(self.usb.vid)} PID={hex(self.usb.pid)}", font=("Segoe UI", 11), bg=THEME['bg_dark'], fg=THEME['text_secondary']).pack(side="left")
         
         self.rgb_btn = tk.Button(status_frame, text="Подключить", command=self.toggle_rgb,
                  font=("Segoe UI", 10), bg=THEME['button'], fg=THEME['text'], 
@@ -656,13 +661,11 @@ class MSICenterUltimate:
             mode = self.current_mode.get()
             speed = SPEEDS[self.current_speed.get()]
             brightness = BRIGHTNESS_LEVELS[self.current_brightness.get()]
-            
             if mode == "Статичный":
                 success = self.usb.set_static_color(zone_mask, r, g, b, brightness)
             else:
                 anim_type = ANIMATION_TYPES[mode]
                 success = self.usb.set_animation(zone_mask, anim_type, speed, r, g, b, brightness)
-            
             if success:
                 messagebox.showinfo("Успех", "Настройки применены")
             else:
@@ -973,6 +976,7 @@ class MSICenterUltimate:
         self.clean_output.delete(1.0, tk.END)
         self.clean_output.insert(tk.END, "🔍 Сканирование...\n")
         junk_size = 0
+        junk_kb = 0
         
         if self.clean_items['browser_cache'].get():
             dirs = [os.path.expanduser("~/.cache/google-chrome"), os.path.expanduser("~/.cache/mozilla/firefox")]
@@ -986,8 +990,12 @@ class MSICenterUltimate:
                             except:
                                 pass
             if total > 0:
+                junk_kb += total // 1024
                 junk_size += total // (1024*1024)
-                self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//(1024*1024)} МБ\n")
+                if total < 1024*1024:
+                    self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//1024} КБ\n")
+                else:
+                    self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//(1024*1024)} МБ\n")
         
         if self.clean_items['tmp_files'].get():
             total = 0
@@ -999,8 +1007,12 @@ class MSICenterUltimate:
                     except:
                         pass
             if total > 0:
+                junk_kb += total // 1024
                 junk_size += total // (1024*1024)
-                self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//(1024*1024)} МБ\n")
+                if total < 1024*1024:
+                    self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//1024} КБ\n")
+                else:
+                    self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//(1024*1024)} МБ\n")
         
         if self.clean_items['trash'].get():
             trash = os.path.expanduser("~/.local/share/Trash/files")
@@ -1013,10 +1025,17 @@ class MSICenterUltimate:
                     except:
                         pass
                 if total > 0:
+                    junk_kb += total // 1024
                     junk_size += total // (1024*1024)
-                    self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//(1024*1024)} МБ\n")
+                    if total < 1024*1024:
+                        self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//1024} КБ\n")
+                    else:
+                        self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//(1024*1024)} МБ\n")
         
-        self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_size} МБ\n")
+        if junk_kb > 0 and junk_size == 0:
+            self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_kb} КБ\n")
+        else:
+            self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_size} МБ\n")
     
     def clean_selected(self):
         if not messagebox.askyesno("Подтверждение", "Удалить выбранное?"):
@@ -1080,7 +1099,7 @@ class MSICenterUltimate:
         tk.Frame(main, height=2, bg=THEME['bg_light']).pack(fill="x", pady=15)
         
         features = [
-            "🎨 RGB управление клавиатурой",
+            "🎨 RGB управление клавиатурой (автоопределение)",
             "🌀 Управление кулерами (Fn+Стрелки)",
             "⚙️ Диспетчер задач с диаграммами",
             "🧹 Очиститель системы",
@@ -1097,7 +1116,6 @@ class MSICenterUltimate:
         tk.Label(main, text=info, font=("Segoe UI", 11), bg=THEME['bg_dark'], 
                 fg=THEME['text_secondary']).pack(pady=5)
 
-# ========== ГЛАВНАЯ ==========
 def main():
     check_and_request_permissions()
     root = tk.Tk()
@@ -1112,11 +1130,12 @@ if __name__ == "__main__":
     main()
 MAIN_EOF
 
-    chmod +x /usr/share/msi-center-ultimate/main.py
-    echo -e "${GREEN}✅ main.py создан${NC}"
-    
-    # === СКРИПТ ЗАПУСКА ===
-    cat > /usr/bin/msi-center-ultimate << 'EOF'
+chmod +x "$ROOT_DIR/usr/share/$APP_NAME/main.py"
+
+# ==================== СОЗДАНИЕ СКРИПТА ЗАПУСКА ====================
+echo -e "${YELLOW}→ Создание скрипта запуска...${NC}"
+
+cat > "$ROOT_DIR/usr/bin/$APP_NAME" << 'BIN_EOF'
 #!/usr/bin/env python3
 import os
 import sys
@@ -1126,41 +1145,23 @@ def main():
     if os.geteuid() == 0:
         if not os.environ.get('DISPLAY'):
             os.environ['DISPLAY'] = ':0'
-        
         if not os.environ.get('XAUTHORITY'):
             import pwd
-            import glob
             try:
                 username = pwd.getpwuid(os.getuid())[0]
-                xauth_paths = [
-                    f'/home/{username}/.Xauthority',
-                    f'/run/user/{os.getuid()}/gdm/Xauthority',
-                    f'/tmp/.Xauthority',
-                ]
-                for path in xauth_paths:
+                paths = [f'/home/{username}/.Xauthority', f'/run/user/{os.getuid()}/gdm/Xauthority', '/tmp/.Xauthority']
+                for path in paths:
                     if os.path.exists(path):
                         os.environ['XAUTHORITY'] = path
                         break
             except:
                 pass
-        
         path = "/usr/share/msi-center-ultimate/main.py"
         if os.path.exists(path):
             os.execv("/usr/bin/python3", ["python3", path] + sys.argv[1:])
-        else:
-            print(f"Ошибка: {path} не найден")
-            sys.exit(1)
         return
-    
     try:
-        display = os.environ.get('DISPLAY', ':0')
-        xauth = os.environ.get('XAUTHORITY', os.path.expanduser('~/.Xauthority'))
-        
-        subprocess.run([
-            'sudo', 
-            '--preserve-env=DISPLAY,XAUTHORITY,HOME,USER',
-            'python3', __file__
-        ] + sys.argv[1:])
+        subprocess.run(['sudo', '--preserve-env=DISPLAY,XAUTHORITY,HOME,USER', 'python3', __file__] + sys.argv[1:])
         sys.exit(0)
     except Exception as e:
         print(f"Ошибка: {e}")
@@ -1168,41 +1169,30 @@ def main():
 
 if __name__ == "__main__":
     main()
-EOF
-    chmod +x /usr/bin/msi-center-ultimate
-    echo -e "${GREEN}✅ Скрипт запуска создан${NC}"
-    
-    # === DESKTOP ФАЙЛЫ ===
-    cat > /usr/share/applications/msi-center-ultimate.desktop << 'EOF'
+BIN_EOF
+
+chmod +x "$ROOT_DIR/usr/bin/$APP_NAME"
+
+# ==================== СОЗДАНИЕ DESKTOP ФАЙЛА ====================
+echo -e "${YELLOW}→ Создание desktop файла...${NC}"
+
+cat > "$ROOT_DIR/usr/share/applications/$APP_NAME.desktop" << DESKTOP_EOF
 [Desktop Entry]
 Name=MSI Center Ultimate
 Comment=Управление RGB, кулерами и системой
-Exec=/usr/bin/msi-center-ultimate
-Icon=msi-center-ultimate
+Exec=/usr/bin/$APP_NAME
+Icon=$APP_NAME
 Terminal=false
 Type=Application
 Categories=System;Utility;
 Keywords=msi;center;control;rgb;fans
 StartupNotify=true
-EOF
-    echo -e "${GREEN}✅ Desktop файл MSI Center Ultimate создан${NC}"
-    
-    cat > /usr/share/applications/msi-keyboard-controller.desktop << 'EOF'
-[Desktop Entry]
-Name=MSI Keyboard Controller
-Comment=Управление RGB подсветкой клавиатуры MSI
-Exec=/usr/bin/msi-center-ultimate
-Icon=msi-rgb
-Terminal=false
-Type=Application
-Categories=System;Utility;
-Keywords=msi;keyboard;rgb;controller
-StartupNotify=true
-EOF
-    echo -e "${GREEN}✅ Desktop файл MSI Keyboard Controller создан${NC}"
-    
-    # === ИКОНКИ ===
-    cat > /usr/share/icons/hicolor/scalable/apps/msi-center-ultimate.svg << 'SVG_EOF'
+DESKTOP_EOF
+
+# ==================== СОЗДАНИЕ ИКОНОК ====================
+echo -e "${YELLOW}→ Создание иконок...${NC}"
+
+cat > "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg" << 'SVG_EOF'
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="40" fill="#1a1a1a"/>
   <rect x="40" y="50" width="176" height="130" rx="15" fill="#0a0a0a" stroke="#ff4444" stroke-width="2"/>
@@ -1221,70 +1211,81 @@ EOF
   <text x="128" y="212" text-anchor="middle" fill="#ff4444" font-size="18" font-weight="bold">MSI CENTER</text>
 </svg>
 SVG_EOF
-    
-    cat > /usr/share/icons/hicolor/256x256/apps/msi-rgb.svg << 'ICON_EOF'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ff0000"/>
-      <stop offset="33%" style="stop-color:#00ff00"/>
-      <stop offset="66%" style="stop-color:#0000ff"/>
-      <stop offset="100%" style="stop-color:#ff00ff"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="45" fill="#1a1a2e"/>
-  <rect x="30" y="70" width="196" height="120" rx="15" fill="#2d2d44" stroke="#444" stroke-width="2"/>
-  <rect x="40" y="80" width="176" height="30" rx="5" fill="url(#grad)" opacity="0.3"/>
-  <g fill="url(#grad)" opacity="0.9">
-    <rect x="45" y="85" width="20" height="20" rx="4"/>
-    <rect x="70" y="85" width="20" height="20" rx="4"/>
-    <rect x="95" y="85" width="20" height="20" rx="4"/>
-    <rect x="120" y="85" width="20" height="20" rx="4"/>
-    <rect x="145" y="85" width="20" height="20" rx="4"/>
-    <rect x="170" y="85" width="20" height="20" rx="4"/>
-    <rect x="195" y="85" width="20" height="20" rx="4"/>
-    <rect x="55" y="110" width="20" height="20" rx="4"/>
-    <rect x="80" y="110" width="20" height="20" rx="4"/>
-    <rect x="105" y="110" width="20" height="20" rx="4"/>
-    <rect x="130" y="110" width="20" height="20" rx="4"/>
-    <rect x="155" y="110" width="20" height="20" rx="4"/>
-    <rect x="180" y="110" width="20" height="20" rx="4"/>
-    <rect x="65" y="135" width="20" height="20" rx="4"/>
-    <rect x="90" y="135" width="20" height="20" rx="4"/>
-    <rect x="115" y="135" width="20" height="20" rx="4"/>
-    <rect x="140" y="135" width="20" height="20" rx="4"/>
-    <rect x="165" y="135" width="20" height="20" rx="4"/>
-  </g>
-  <text x="128" y="225" text-anchor="middle" fill="#e0e0e0" 
-        font-family="Arial, sans-serif" font-weight="bold" font-size="28">
-    MSI RGB
-  </text>
-</svg>
-ICON_EOF
-    
-    cp /usr/share/icons/hicolor/256x256/apps/msi-rgb.svg /usr/share/icons/hicolor/scalable/apps/msi-rgb.svg 2>/dev/null || true
-    
-    mkdir -p ~/.local/share/icons/hicolor/256x256/apps 2>/dev/null || true
-    cp /usr/share/icons/hicolor/256x256/apps/msi-rgb.svg ~/.local/share/icons/hicolor/256x256/apps/ 2>/dev/null || true
-    cp /usr/share/icons/hicolor/256x256/apps/msi-rgb.svg ~/.local/share/icons/hicolor/scalable/apps/ 2>/dev/null || true
-    
-    echo -e "${GREEN}✅ Иконки созданы${NC}"
-    
-    # Обновляем кеш иконок
-    update-icon-caches /usr/share/icons/hicolor 2>/dev/null || true
-    update-icon-caches ~/.local/share/icons/hicolor 2>/dev/null || true
-    gtk-update-icon-cache -f /usr/share/icons/hicolor 2>/dev/null || true
-    
-    echo -e "${GREEN}✅ MSI Center Ultimate установлен!${NC}"
-    echo -e "${BLUE}🚀 Запуск: msi-center-ultimate${NC}"
-    echo -e "${BLUE}   или через меню: MSI Center Ultimate${NC}"
-    echo -e "${BLUE}   или через меню: MSI Keyboard Controller${NC}"
-    exit 0
+
+cp "$ROOT_DIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg" "$ROOT_DIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.svg" 2>/dev/null || true
+
+# ==================== СОЗДАНИЕ DEBIAN ФАЙЛОВ ====================
+echo -e "${YELLOW}→ Создание DEBIAN файлов...${NC}"
+
+# control
+cat > "$DEB_DIR/control" << CONTROL_EOF
+Package: $APP_NAME
+Version: $APP_VERSION
+Section: utils
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.8), python3-tk, python3-pip, libusb-1.0-0
+Recommends: python3-usb
+Maintainer: $MAINTAINER
+Description: $DESCRIPTION
+ MSI Center Ultimate - мощный центр управления для ноутбуков MSI.
+ .
+ Возможности:
+  * RGB управление клавиатурой (автоопределение USB при каждом запуске)
+  * Управление кулерами (Fn+Стрелки)
+  * Диспетчер задач с диаграммами
+  * Очиститель системы
+ .
+ Требуются права root для управления кулерами и RGB.
+CONTROL_EOF
+
+# postinst
+cat > "$DEB_DIR/postinst" << 'POSTINST_EOF'
+#!/bin/sh
+set -e
+pip3 install pyusb 2>/dev/null || true
+update-icon-caches /usr/share/icons/hicolor 2>/dev/null || true
+update-desktop-database /usr/share/applications 2>/dev/null || true
+echo "✅ MSI Center Ultimate установлен!"
+echo "🚀 Запуск: msi-center-ultimate"
+exit 0
+POSTINST_EOF
+
+chmod +x "$DEB_DIR/postinst"
+
+# prerm
+cat > "$DEB_DIR/prerm" << 'PRERM_EOF'
+#!/bin/sh
+set -e
+echo "🗑️ Удаление MSI Center Ultimate..."
+exit 0
+PRERM_EOF
+
+chmod +x "$DEB_DIR/prerm"
+
+# ==================== СБОРКА DEB ====================
+echo -e "${YELLOW}→ Сборка DEB пакета...${NC}"
+
+DEB_FILE="${APP_NAME}_${APP_VERSION}_all.deb"
+
+dpkg-deb --build "$BUILD_DIR" "$DEB_FILE" 2>&1
+
+if [ -f "$DEB_FILE" ]; then
+    echo -e "${GREEN}✅ DEB пакет создан: $DEB_FILE${NC}"
+    echo -e "${BLUE}📦 Путь: $(pwd)/$DEB_FILE${NC}"
+    echo ""
+    echo -e "${BLUE}Установка:${NC}"
+    echo -e "  sudo dpkg -i $DEB_FILE"
+    echo -e "  sudo apt install -f"
+    echo ""
+    echo -e "${BLUE}Или просто запусти:${NC}"
+    echo -e "  sudo ./$DEB_FILE"
+else
+    echo -e "${RED}❌ Ошибка сборки DEB пакета!${NC}"
+    exit 1
 fi
 
-# === ЗАПУСК С ГРАФИЧЕСКИМ ПАРОЛЕМ ===
-echo -e "${YELLOW}🔐 Запрос пароля...${NC}"
-sudo -E DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" "$0"
+# ==================== ОЧИСТКА ====================
+rm -rf "$BUILD_DIR"
 
-echo -e "${GREEN}✅ Установка завершена!${NC}"
-echo -e "${BLUE}🚀 Запуск: msi-center-ultimate${NC}" 
+echo -e "${GREEN}✅ Готово!${NC}"
