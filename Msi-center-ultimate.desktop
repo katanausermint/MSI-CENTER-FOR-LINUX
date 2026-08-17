@@ -1,0 +1,12 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Name=MSI Center Ultimate
+Comment=Управление RGB, кулерами и системой
+Exec=sh -c "pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY /usr/bin/msi-center-ultimate"
+Icon=msi-center-ultimate
+Terminal=false
+Type=Application
+Categories=System;Utility;
+Keywords=msi;center;control;rgb;fans
+StartupNotify=true
+Path=
