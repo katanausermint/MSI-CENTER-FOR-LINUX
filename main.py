@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MSI Center Ultimate - Всё в одном
-RGB + Кулеры + Диспетчер + Очиститель
+MSI Center Ultimate - С АВТООПРЕДЕЛЕНИЕМ USB
+Работает на ЛЮБЫХ MSI клавиатурах!
 """
 
 import os
@@ -15,7 +15,6 @@ import re
 from datetime import datetime
 import math
 
-# ============== ПРОВЕРКА ПРАВ ==============
 def check_and_request_permissions():
     if os.geteuid() != 0:
         print("Требуются права root. Перезапуск с sudo...")
@@ -27,7 +26,6 @@ def check_and_request_permissions():
             print(f"Ошибка: {e}")
             sys.exit(1)
 
-# ============== ТЕМА ==============
 THEME = {
     'bg_dark': '#1a1a1a',
     'bg_medium': '#2d2d2d',
@@ -45,7 +43,7 @@ THEME = {
     'button_hover': '#5a5a5a',
 }
 
-# ============== RGB КОНФИГ ==============
+# ============== АВТООПРЕДЕЛЕНИЕ USB ==============
 try:
     import usb.core
     import usb.util
@@ -54,8 +52,36 @@ except:
     USB_AVAILABLE = False
     print("⚠️ pyusb не установлен. RGB функция будет отключена.")
 
-VENDOR_ID = 0x1462
-PRODUCT_ID = 0x1601
+def find_msi_keyboard():
+    if not USB_AVAILABLE:
+        return None, None
+    try:
+        devices = usb.core.find(find_all=True, idVendor=0x1462)
+        for dev in devices:
+            try:
+                if dev.iProduct:
+                    product = usb.util.get_string(dev, dev.iProduct)
+                    if product and ('keyboard' in product.lower() or 'msi' in product.lower()):
+                        return dev.idVendor, dev.idProduct
+            except:
+                pass
+            if dev.bDeviceClass == 0x03:
+                return dev.idVendor, dev.idProduct
+        first_dev = usb.core.find(idVendor=0x1462)
+        if first_dev:
+            return first_dev.idVendor, first_dev.idProduct
+    except:
+        pass
+    return None, None
+
+VENDOR_ID, PRODUCT_ID = find_msi_keyboard()
+if VENDOR_ID is None or PRODUCT_ID is None:
+    VENDOR_ID = 0x1462
+    PRODUCT_ID = 0x1601
+    print("⚠️ Используются стандартные ID")
+else:
+    print(f"✅ Найдена MSI клавиатура: VID={hex(VENDOR_ID)}, PID={hex(PRODUCT_ID)}")
+
 INTERFACE = 0
 REPORT_ID_SEND = 2
 REPORT_ID_RECV = 1
@@ -101,32 +127,30 @@ FAN_MODES = {
     '🔇 Тихий': 'quiet'
 }
 
-# ============== USB КОНТРОЛЛЕР ==============
 class USBController:
     def __init__(self):
         self.device = None
         self.connected = False
         self.usb_available = USB_AVAILABLE
+        self.vid = VENDOR_ID
+        self.pid = PRODUCT_ID
     
     def connect(self) -> bool:
         if not self.usb_available:
             return False
         try:
-            self.device = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+            self.device = usb.core.find(idVendor=self.vid, idProduct=self.pid)
             if self.device is None:
                 return False
-            
             if self.device.is_kernel_driver_active(INTERFACE):
                 try:
                     self.device.detach_kernel_driver(INTERFACE)
                 except:
                     pass
-            
             try:
                 self.device.set_configuration()
             except:
                 pass
-            
             self.connected = True
             return True
         except:
@@ -151,7 +175,6 @@ class USBController:
         try:
             report = bytearray([REPORT_ID_SEND] + list(data))
             report += b'\x00' * (64 - len(report))
-            
             self.device.ctrl_transfer(
                 bmRequestType=0x21,
                 bRequest=0x09,
@@ -168,7 +191,6 @@ class USBController:
     def set_static_color(self, zone_mask: int, red: int, green: int, blue: int, brightness: int = 0xFF) -> bool:
         if red == 0 and green == 0 and blue == 0:
             brightness = 0x00
-        
         data = bytes([
             0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x01,
             0x00, 0x00, red, green, blue, brightness
@@ -189,7 +211,6 @@ class USBController:
     def load_from_flash(self) -> bool:
         return self._send_feature_report(bytes([0xB0]))
 
-# ============== КОНТРОЛЛЕР КУЛЕРОВ ==============
 class FanController:
     def __init__(self):
         self.fan_names = []
@@ -202,7 +223,6 @@ class FanController:
         self.fan_names = []
         self.fan_files = []
         self.fan_speeds = {}
-        
         try:
             for hwmon in glob.glob('/sys/class/hwmon/hwmon*/'):
                 name_file = os.path.join(hwmon, 'name')
@@ -211,7 +231,6 @@ class FanController:
                         device_name = f.read().strip()
                 else:
                     continue
-                
                 fan_inputs = sorted(glob.glob(hwmon + 'fan*_input'))
                 for fan_file in fan_inputs:
                     fan_num = re.search(r'fan(\d+)_input', fan_file)
@@ -221,11 +240,9 @@ class FanController:
                         self.fan_names.append(f"{device_name} Fan {num}")
         except:
             pass
-        
         if not self.fan_names:
             self.fan_names = ["CPU Fan", "System Fan"]
             self.fan_files = ["", ""]
-        
         self.update_speeds()
     
     def update_speeds(self):
@@ -251,14 +268,12 @@ class FanController:
                 with open(perf_file, 'w') as f:
                     f.write(str(mode_map.get(mode, 1)))
                 return True
-            
             ec_perf = '/sys/devices/platform/msi-ec/perf_mode'
             if os.path.exists(ec_perf):
                 mode_map = {'quiet': 0, 'balanced': 1, 'auto': 1, 'max': 3}
                 with open(ec_perf, 'w') as f:
                     f.write(str(mode_map.get(mode, 1)))
                 return True
-            
             return True
         except:
             return False
@@ -271,7 +286,6 @@ class FanController:
                     mode = f.read().strip()
                 mode_map = {'0': 'quiet', '1': 'balanced', '2': 'performance', '3': 'max'}
                 return mode_map.get(mode, 'auto')
-            
             ec_perf = '/sys/devices/platform/msi-ec/perf_mode'
             if os.path.exists(ec_perf):
                 with open(ec_perf, 'r') as f:
@@ -282,7 +296,6 @@ class FanController:
             pass
         return 'auto'
 
-# ============== ДИСПЕТЧЕР ЗАДАЧ ==============
 class ProcessManager:
     def __init__(self):
         self.processes = []
@@ -294,16 +307,14 @@ class ProcessManager:
         self.update()
     
     def _get_cpu_times(self):
-        """Получение времени CPU из /proc/stat"""
         try:
             with open('/proc/stat', 'r') as f:
                 line = f.readline()
                 parts = line.split()
                 if parts[0] == 'cpu':
-                    # user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice
                     values = [int(x) for x in parts[1:]]
                     total = sum(values)
-                    idle = values[3] + values[4]  # idle + iowait
+                    idle = values[3] + values[4]
                     return {'total': total, 'idle': idle}
         except:
             return None
@@ -314,25 +325,19 @@ class ProcessManager:
         self.total_memory = 0
         self.cpu_count = os.cpu_count() or 1
         
-        # ====== РАСЧЁТ CPU ======
         current_times = self._get_cpu_times()
         cpu_percent = 0
-        
         if current_times and hasattr(self, 'prev_cpu_times') and self.prev_cpu_times:
             prev = self.prev_cpu_times
             curr = current_times
-            
             total_diff = curr['total'] - prev['total']
             idle_diff = curr['idle'] - prev['idle']
-            
             if total_diff > 0:
                 cpu_percent = ((total_diff - idle_diff) / total_diff) * 100
                 cpu_percent = max(0, min(100, cpu_percent))
-        
         self.cpu_percent = cpu_percent
         self.prev_cpu_times = current_times
         
-        # ====== СБОР ПРОЦЕССОВ ======
         try:
             with open('/proc/meminfo', 'r') as f:
                 meminfo = f.read()
@@ -341,13 +346,11 @@ class ProcessManager:
                     self.total_memory = int(mem_match.group(1)) // 1024
             
             total_ram_used = 0
-            
             for pid_dir in glob.glob('/proc/[0-9]*'):
                 pid = os.path.basename(pid_dir)
                 try:
                     with open(f'/proc/{pid}/comm', 'r') as f:
                         name = f.read().strip()[:30]
-                    
                     with open(f'/proc/{pid}/stat', 'r') as f:
                         stat = f.read().split()
                         if len(stat) > 22:
@@ -356,14 +359,11 @@ class ProcessManager:
                             total_time = utime + stime
                             rss = int(stat[23]) * 4 // 1024
                             status = stat[2]
-                            
                             status_map = {'R': '▶️ Выполняется', 'S': '💤 Спит', 
                                          'D': '⏳ Ожидает', 'Z': '🧟 Зомби', 
                                          'T': '⏸️ Остановлен'}
                             status_str = status_map.get(status, status)
-                            
                             total_ram_used += rss
-                            
                             self.processes.append({
                                 'pid': pid,
                                 'name': name,
@@ -376,22 +376,15 @@ class ProcessManager:
                     pass
             
             self.processes.sort(key=lambda x: x['cpu'], reverse=True)
-            
             total_cpu_all = sum(p['cpu'] for p in self.processes)
             for p in self.processes:
                 p['cpu_percent'] = min(99.9, (p['cpu'] / max(1, total_cpu_all)) * 100)
-            
             self.memory_percent = min(100, (total_ram_used / max(1, self.total_memory)) * 100)
-                
         except Exception as e:
             print(f"Ошибка обновления процессов: {e}")
     
     def get_top_cpu(self, n=5):
         sorted_proc = sorted(self.processes, key=lambda x: x['cpu'], reverse=True)
-        return sorted_proc[:n]
-    
-    def get_top_memory(self, n=5):
-        sorted_proc = sorted(self.processes, key=lambda x: x['memory'], reverse=True)
         return sorted_proc[:n]
     
     def kill_process(self, pid):
@@ -415,7 +408,6 @@ class ProcessManager:
         except:
             return False
 
-# ============== ОСНОВНОЙ GUI ==============
 class MSICenterUltimate:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -423,14 +415,11 @@ class MSICenterUltimate:
         self.fan = FanController()
         self.process_manager = ProcessManager()
         
-        # RGB переменные
         self.current_color = "#ff0000"
         self.current_mode = tk.StringVar(value="Статичный")
         self.current_zone = tk.StringVar(value="Вся клавиатура")
         self.current_brightness = tk.StringVar(value="Максимальная")
         self.current_speed = tk.StringVar(value="Средне")
-        
-        # Fan переменные
         self.fan_mode = tk.StringVar(value="🌿 Авто")
         
         self.setup_window()
@@ -458,7 +447,6 @@ class MSICenterUltimate:
         style.map('TNotebook.Tab', background=[('selected', THEME['accent'])])
         style.configure('TFrame', background=THEME['bg_dark'])
         style.configure('TLabel', background=THEME['bg_dark'], foreground=THEME['text'])
-        
         style.configure('Treeview', background=THEME['bg_light'], foreground=THEME['text'],
                        fieldbackground=THEME['bg_light'], font=('Segoe UI', 10))
         style.map('Treeview', background=[('selected', THEME['accent'])])
@@ -469,24 +457,18 @@ class MSICenterUltimate:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
     
-    # ========== ФУНКЦИЯ ДЛЯ ЦВЕТА ТЕКСТА ==========
     def _is_dark_color(self, hex_color: str) -> bool:
-        """Проверяет, является ли цвет тёмным или средним (для белого текста)"""
         r, g, b = self._hex_to_rgb(hex_color)
         brightness = (r * 299 + g * 587 + b * 114) / 1000
-        # Тёмные и средние цвета → белый текст
-        # Светлые цвета (яркость > 180) → чёрный текст
         return brightness <= 180
     
     def _get_text_color(self, hex_color: str) -> str:
-        """Возвращает цвет текста для контраста с фоном"""
         return "white" if self._is_dark_color(hex_color) else "black"
     
     def _hex_to_rgb(self, hex_color: str):
         hex_color = hex_color.lstrip('#')
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     
-    # ========== RGB ТАБ ==========
     def create_rgb_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="🎨 RGB")
@@ -496,8 +478,7 @@ class MSICenterUltimate:
         
         self.status_dot = tk.Canvas(status_frame, width=15, height=15, bg=THEME['bg_dark'], highlightthickness=0)
         self.status_dot.pack(side="left", padx=(0, 10))
-        
-        tk.Label(status_frame, text="RGB контроллер", font=("Segoe UI", 12), bg=THEME['bg_dark'], fg=THEME['text_secondary']).pack(side="left")
+        tk.Label(status_frame, text=f"VID={hex(self.usb.vid)} PID={hex(self.usb.pid)}", font=("Segoe UI", 11), bg=THEME['bg_dark'], fg=THEME['text_secondary']).pack(side="left")
         
         self.rgb_btn = tk.Button(status_frame, text="Подключить", command=self.toggle_rgb,
                  font=("Segoe UI", 10), bg=THEME['button'], fg=THEME['text'], 
@@ -576,7 +557,6 @@ class MSICenterUltimate:
         tk.Button(btn_frame, text="✅ Применить", command=self.apply_rgb,
                  font=("Segoe UI", 12, "bold"), bg=THEME['accent'], fg="white", relief="flat", padx=20, pady=8, cursor="hand2").pack(fill="x", pady=5)
     
-    # ========== RGB ФУНКЦИИ ==========
     def toggle_rgb(self):
         if self.usb.connected:
             self.usb.disconnect()
@@ -624,13 +604,11 @@ class MSICenterUltimate:
             mode = self.current_mode.get()
             speed = SPEEDS[self.current_speed.get()]
             brightness = BRIGHTNESS_LEVELS[self.current_brightness.get()]
-            
             if mode == "Статичный":
                 success = self.usb.set_static_color(zone_mask, r, g, b, brightness)
             else:
                 anim_type = ANIMATION_TYPES[mode]
                 success = self.usb.set_animation(zone_mask, anim_type, speed, r, g, b, brightness)
-            
             if success:
                 messagebox.showinfo("Успех", "Настройки применены")
             else:
@@ -646,7 +624,6 @@ class MSICenterUltimate:
         if self.usb.connected and self.usb.load_from_flash():
             messagebox.showinfo("Успех", "Загружено из flash")
     
-    # ========== FAN ТАБ ==========
     def create_fan_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="🌀 Кулеры")
@@ -690,7 +667,6 @@ class MSICenterUltimate:
         tk.Label(right, text="Fn + ↑ = Максимум  |  Fn + ↓ = Авто", 
                 font=("Segoe UI", 11), bg=THEME['bg_medium'], fg=THEME['text_secondary']).pack(pady=5)
     
-    # ========== FAN ФУНКЦИИ ==========
     def update_fan_list(self):
         self.fan_listbox.delete(0, tk.END)
         for fan in self.fan.fan_names:
@@ -720,7 +696,6 @@ class MSICenterUltimate:
         else:
             messagebox.showerror("Ошибка", "Не удалось применить режим")
     
-    # ========== ДИСПЕТЧЕР ЗАДАЧ ==========
     def create_task_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="⚙️ Процессы")
@@ -748,7 +723,6 @@ class MSICenterUltimate:
         content = tk.Frame(main_panel, bg=THEME['bg_dark'])
         content.pack(fill="both", expand=True)
         
-        # ЛЕВАЯ ЧАСТЬ: Таблица
         left_frame = tk.Frame(content, bg=THEME['bg_medium'])
         left_frame.pack(side="left", fill="both", expand=True)
         
@@ -762,7 +736,6 @@ class MSICenterUltimate:
         
         self.process_tree.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Контекстное меню
         self.context_menu = tk.Menu(self.root, tearoff=0, bg=THEME['bg_medium'], fg=THEME['text'])
         self.context_menu.add_command(label="▶️ Завершить", command=self.kill_selected)
         self.context_menu.add_command(label="⏸️ Приостановить", command=self.suspend_selected)
@@ -772,7 +745,6 @@ class MSICenterUltimate:
         
         self.process_tree.bind("<Button-3>", self.show_context_menu)
         
-        # ПРАВАЯ ЧАСТЬ: Диаграммы
         right_frame = tk.Frame(content, bg=THEME['bg_medium'], width=350)
         right_frame.pack(side="right", fill="both", padx=(10, 0))
         right_frame.pack_propagate(False)
@@ -780,11 +752,9 @@ class MSICenterUltimate:
         tk.Label(right_frame, text="СИСТЕМНАЯ НАГРУЗКА", font=("Segoe UI", 12, "bold"),
                 bg=THEME['bg_medium'], fg=THEME['accent']).pack(pady=5)
         
-        # Кольцевые диаграммы
         ring_frame = tk.Frame(right_frame, bg=THEME['bg_medium'])
         ring_frame.pack(fill="x", pady=5)
         
-        # CPU кольцо
         cpu_frame = tk.Frame(ring_frame, bg=THEME['bg_medium'])
         cpu_frame.pack(side="left", expand=True, fill="both")
         
@@ -794,7 +764,6 @@ class MSICenterUltimate:
         self.cpu_label = tk.Label(cpu_frame, text="0%", font=("Segoe UI", 14, "bold"), bg=THEME['bg_medium'], fg=THEME['accent_green'])
         self.cpu_label.pack()
         
-        # RAM кольцо
         ram_frame = tk.Frame(ring_frame, bg=THEME['bg_medium'])
         ram_frame.pack(side="right", expand=True, fill="both")
         
@@ -804,7 +773,6 @@ class MSICenterUltimate:
         self.ram_label = tk.Label(ram_frame, text="0%", font=("Segoe UI", 14, "bold"), bg=THEME['bg_medium'], fg=THEME['accent_blue'])
         self.ram_label.pack()
         
-        # Топ процессов
         top_frame = tk.LabelFrame(right_frame, text="ТОП ПРОЦЕССОВ", font=("Segoe UI", 10, "bold"),
                                  bg=THEME['bg_medium'], fg=THEME['accent_gold'], padx=10, pady=5)
         top_frame.pack(fill="both", expand=True, pady=5)
@@ -859,7 +827,6 @@ class MSICenterUltimate:
     def update_task_manager(self):
         self.process_manager.update()
         
-        # Обновляем таблицу
         for item in self.process_tree.get_children():
             self.process_tree.delete(item)
         
@@ -872,7 +839,6 @@ class MSICenterUltimate:
                 p['status']
             ))
         
-        # Обновляем кольцевые диаграммы
         cpu_percent = self.process_manager.cpu_percent
         ram_percent = self.process_manager.memory_percent
         
@@ -882,7 +848,6 @@ class MSICenterUltimate:
         self.draw_ring(self.cpu_canvas, 130, cpu_percent, THEME['accent_green'])
         self.draw_ring(self.ram_canvas, 130, ram_percent, THEME['accent_blue'])
         
-        # Обновляем топ процессов
         self.top_listbox.delete(0, tk.END)
         top_proc = self.process_manager.get_top_cpu(8)
         for p in top_proc:
@@ -908,7 +873,6 @@ class MSICenterUltimate:
         canvas.create_text(cx, cy, text=f"{percent:.0f}%", 
                           font=("Segoe UI", 12, "bold"), fill=color)
     
-    # ========== ОЧИСТИТЕЛЬ ==========
     def create_cleaner_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="🧹 Очистка")
@@ -955,6 +919,7 @@ class MSICenterUltimate:
         self.clean_output.delete(1.0, tk.END)
         self.clean_output.insert(tk.END, "🔍 Сканирование...\n")
         junk_size = 0
+        junk_kb = 0
         
         if self.clean_items['browser_cache'].get():
             dirs = [os.path.expanduser("~/.cache/google-chrome"), os.path.expanduser("~/.cache/mozilla/firefox")]
@@ -968,8 +933,12 @@ class MSICenterUltimate:
                             except:
                                 pass
             if total > 0:
+                junk_kb += total // 1024
                 junk_size += total // (1024*1024)
-                self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//(1024*1024)} МБ\n")
+                if total < 1024*1024:
+                    self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//1024} КБ\n")
+                else:
+                    self.clean_output.insert(tk.END, f"  🌐 Кэш браузеров: {total//(1024*1024)} МБ\n")
         
         if self.clean_items['tmp_files'].get():
             total = 0
@@ -981,8 +950,12 @@ class MSICenterUltimate:
                     except:
                         pass
             if total > 0:
+                junk_kb += total // 1024
                 junk_size += total // (1024*1024)
-                self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//(1024*1024)} МБ\n")
+                if total < 1024*1024:
+                    self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//1024} КБ\n")
+                else:
+                    self.clean_output.insert(tk.END, f"  📁 Временные файлы: {total//(1024*1024)} МБ\n")
         
         if self.clean_items['trash'].get():
             trash = os.path.expanduser("~/.local/share/Trash/files")
@@ -995,10 +968,17 @@ class MSICenterUltimate:
                     except:
                         pass
                 if total > 0:
+                    junk_kb += total // 1024
                     junk_size += total // (1024*1024)
-                    self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//(1024*1024)} МБ\n")
+                    if total < 1024*1024:
+                        self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//1024} КБ\n")
+                    else:
+                        self.clean_output.insert(tk.END, f"  🗑️ Корзина: {total//(1024*1024)} МБ\n")
         
-        self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_size} МБ\n")
+        if junk_kb > 0 and junk_size == 0:
+            self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_kb} КБ\n")
+        else:
+            self.clean_output.insert(tk.END, f"\n✅ Найдено мусора: {junk_size} МБ\n")
     
     def clean_selected(self):
         if not messagebox.askyesno("Подтверждение", "Удалить выбранное?"):
@@ -1035,7 +1015,6 @@ class MSICenterUltimate:
         
         self.clean_output.insert(tk.END, "\n🎉 Очистка завершена!\n")
     
-    # ========== О ПРОГРАММЕ ==========
     def create_about_tab(self):
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="О программе")
@@ -1080,7 +1059,6 @@ class MSICenterUltimate:
         tk.Label(main, text=info, font=("Segoe UI", 11), bg=THEME['bg_dark'], 
                 fg=THEME['text_secondary']).pack(pady=5)
 
-# ========== ГЛАВНАЯ ==========
 def main():
     check_and_request_permissions()
     root = tk.Tk()
