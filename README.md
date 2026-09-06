@@ -35,6 +35,11 @@ sudo python3 main.py
 chmod +x build_deb.sh
 ./build_deb.sh
 ```
+Способ 4 - Бинарный файл (БЕТА ТЕСТ)
+
+```bash
+sudo ./msi_center
+```
 
 ---
 
@@ -152,3 +157,4 @@ MIT License — подробности в файле LICENSE
 🐉 MSI Center Ultimate — Управляй своим MSI на Linux!
 
 ```
+This project is completely made by AI and the instability or bugs for it are ok install at your own risk
