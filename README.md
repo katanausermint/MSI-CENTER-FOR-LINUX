@@ -35,7 +35,7 @@ sudo python3 main.py
 chmod +x build_deb.sh
 ./build_deb.sh
 ```
-Способ 4 - Бинарный файл (БЕТА ТЕСТ)
+Способ 4 — Бинарный файл (БЕТА ТЕСТ)
 
 ```bash
 sudo ./msi_center
